@@ -4,11 +4,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
 
+import javax.servlet.http.HttpServletResponse;
 import java.util.UUID;
 
 @RestController
@@ -24,7 +26,8 @@ public class TransactionController {
     private Integer sleepTimeMs;
 
     @RequestMapping("/action")
-    public String action(@RequestHeader(value = "transactionId", required = false) String transactionId) throws InterruptedException {
+    public String action(@RequestHeader(value = "transactionId", required = false) String transactionId,
+                                         HttpServletResponse response) throws InterruptedException {
         System.out.println();
         if (transactionId != null) {
             System.out.println("Execution action with transactionId '" + transactionId + "'...");
@@ -46,6 +49,10 @@ public class TransactionController {
         System.out.println("DONE");
         System.out.println();
 
+        if (transactionId == null) {
+            transactionId = generateTransactionId();
+        }
+
         // call other service
         if (nextService != null) {
             System.out.println("Calling next service '" + nextService + "'...");
@@ -53,7 +60,7 @@ public class TransactionController {
 
             RestTemplate restTemplate = new RestTemplate();
             HttpHeaders headers = new HttpHeaders();
-            headers.set("transactionId", transactionId != null ? transactionId : generateTransactionId());
+            headers.set("transactionId", transactionId);
             HttpEntity entity = new HttpEntity(headers);
             new Thread(
                     () -> {
@@ -66,6 +73,7 @@ public class TransactionController {
             ).start();
         }
 
+        response.addHeader("transactionId", transactionId);
         // success or fail
         if (shouldFail != null && shouldFail != false) {
             throw new RuntimeException("Service execution failed!");
