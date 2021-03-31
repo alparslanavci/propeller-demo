@@ -1,0 +1,66 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: propeller-filter
+  namespace: default
+spec:
+  configPatches:
+    # The first patch adds the lua filter to the listener/http connection manager
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+    patch:
+      operation: INSERT_BEFORE
+      value: # lua filter specification
+        name: envoy.filters.http.lua
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          inlineCode: |
+           function envoy_on_request(request_handle)
+             -- Make an HTTP call to an upstream host with the following headers, body, and timeout.
+             request_handle:logWarn("Running propeller on request...")
+             local transactionId = request_handle:headers():get("transactionId")
+             if (transactionId ~= nil) then
+                 local headers, body = request_handle:httpCall(
+                  "outbound|80||springboot-service.default.svc.cluster.local",
+                  {
+                   [":method"] = "POST",
+                   [":path"] = "/put?key="..transactionId.."&value="..request_handle:headers():get(":authority"),
+                   [":authority"] = request_handle:headers():get(":authority")
+                  },
+                 "",
+                 5000)
+                 request_handle:logWarn("Stored the compensationg action for "..transactionId)
+             else
+                 request_handle:logWarn("~~~~~~~~~~~~~~~No transaction id found.~~~~~~~~~~~~~~~")
+             end
+           end
+           function envoy_on_response(response_handle)
+             response_handle:logWarn("Running propeller on response... with status:"..response_handle:headers():get(":status"))
+             if (response_handle:headers():get(":status") ~= "200") then
+                -- Call compenstation action here
+                local transactionId = response_handle:headers():get("transactionId")
+                local headers, body = response_handle:httpCall(
+                "outbound|80||springboot-service.default.svc.cluster.local",
+                {
+                  [":method"] = "GET",
+                  [":path"] = "/get?key="..transactionId,
+                  [":authority"] = "springboot-service.default.svc.cluster.local"
+                },
+                "",
+                5000)
+                print(body)
+                for endpoint in string.gmatch(body, "([^,]+)") do
+                    local headers, body = response_handle:httpCall(
+                    endpoint,
+                    {
+                      [":method"] = "GET",
+                      [":path"] = "/compensation",
+                      [":authority"] = "springboot-service.default.svc.cluster.local"
+                    },
+                    "",
+                    5000)
+                end
+                response_handle:logWarn("Compensation action called.")
+             end
+           end
